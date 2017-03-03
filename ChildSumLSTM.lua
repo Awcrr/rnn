@@ -237,7 +237,7 @@ function ChildSumLSTM:updateOutput(input)
          self.zeroMask = self.zeroMask or ((torch.type(cur_x) == 'torch.CudaTensor') and torch.CudaByteTensor() or torch.ByteTensor())
          self._zeroMask.eq(self.zeroMask, self._zeroMask, 0)     
          -- zero masked output
-         self:recursiveMask({self.next_h, next_c, cur_gates}, self.zeroMask)
+         self:recursiveMask({cur_h, cur_c, cur_gates, cur_fgates}, self.zeroMask)
       end
       
       -- prev_h, prev_c = self.next_h, next_c
