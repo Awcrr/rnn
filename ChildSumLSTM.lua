@@ -55,7 +55,6 @@ function ChildSumLSTM:__init(inputsize, hiddensize, outputsize)
    self.grad_h0 = torch.Tensor()
    self.grad_x = torch.Tensor()
    self.gradInput = {self.grad_c0, self.grad_h0, self.grad_x}
-
    
    -- set this to true to forward inputs as batchsize x seqlen x ...
    -- instead of seqlen x batchsize
@@ -177,36 +176,8 @@ function ChildSumLSTM:updateOutput(input)
       end
    end
 
-   self._return_grad_c0 = (c0 ~= nil)
-   self._return_grad_h0 = (h0 ~= nil)
-   if not c0 then
-      c0 = self.c0
-      if self.userPrevCell then
-         local prev_N = self.userPrevCell:size(1)
-         assert(prev_N == N, 'batch sizes must be consistent with userPrevCell')
-         c0:resizeAs(self.userPrevCell):copy(self.userPrevCell)
-      elseif c0:nElement() == 0 or not remember then
-         c0:resize(N, H):zero()
-      elseif remember then
-         local prev_T, prev_N = self.cell:size(1), self.cell:size(2)
-         assert(prev_N == N, 'batch sizes must be constant to remember states')
-         c0:copy(self.cell[prev_T])
-      end
-   end
-   if not h0 then
-      h0 = self.h0
-      if self.userPrevOutput then
-         local prev_N = self.userPrevOutput:size(1)
-         assert(prev_N == N, 'batch sizes must be consistent with userPrevOutput')
-         h0:resizeAs(self.userPrevOutput):copy(self.userPrevOutput)
-      elseif h0:nElement() == 0 or not remember then
-         h0:resize(N, R):zero()
-      elseif remember then
-         local prev_T, prev_N = self._output:size(1), self._output:size(2)
-         assert(prev_N == N, 'batch sizes must be the same to remember states')
-         h0:copy(self._output[prev_T])
-      end
-   end
+   self._return_grad_c0 = nil -- (c0 ~= nil)
+   self._return_grad_h0 = nil -- (h0 ~= nil)
 
    local bias_expand = self.bias:narrow(1, 1, 3 * H):view(1, 3 * H):expand(N, 3 * H)
    local fbias_expand = self.bias:narrow(1, 3 * H + 1, H):view(1, H):expand(N, H)
@@ -229,8 +200,8 @@ function ChildSumLSTM:updateOutput(input)
       local cur_x = x[t]
       local cur_h = h[t]
       local cur_c = c[t]
-      local cur_gates = self.gates[t]
-      local cur_fgates = self.fgates[t]
+      local cur_gates = self.gates[t] -- size: (N, H)
+      local cur_fgates = self.fgates[t] -- size: (N, T, H)
       cur_gates:addmm(bias_expand, cur_x, Wx)
       self.buffer0:cmul(h:transpose(1, 2), connect_expand[t]) -- size: (N, T, H)
       self.buffer1:copy(torch.sum(self.buffer0, 2):view(N, H)) -- size: (N, H)
@@ -306,7 +277,7 @@ function ChildSumLSTM:backward(input, gradOutput, scale)
    if not c0 then c0 = self.c0 end
    if not h0 then h0 = self.h0 end
 
-   local grad_c0, grad_h0, grad_x, grad_c, grad_h = self.grad_c0, self.grad_h0, self._grad_x, self._grad_c, self._grad_h
+   local grad_x, grad_c, grad_h = self._grad_x, self._grad_c, self._grad_h
    local h, c = self._output, self.cell
    
    local Wx = self.weight:narrow(1,1,D):narrow(2, 1, 3 * H)
@@ -320,14 +291,14 @@ function ChildSumLSTM:backward(input, gradOutput, scale)
    local grad_b = self.gradBias:narrow(1, 1, 3 * H)
    local grad_fb = self.gradBias:narrow(1, 3 * H + 1, H)
 
-   grad_h0:resizeAs(h0):zero()
-   grad_c0:resizeAs(c0):zero()
+   -- grad_h0:resizeAs(h0):zero()
+   -- grad_c0:resizeAs(c0):zero()
    grad_x:resizeAs(x):zero()
    grad_c:resizeAs(c):zero()
    grad_h:resizeAs(h):zero()
    self.buffer0:resize(N, T, H):zero() -- size: (N, T, H)
-   self.buffer1:resizeAs(h0):zero() -- size: (N, H)
-   self.buffer2:resizeAs(c0):zero() -- size: (N, H)
+   self.buffer1:resize(N, H):zero() -- size: (N, H)
+   self.buffer2:resize(N, H):zero() -- size: (N, H)
    -- self.grad_next_h = self.gradPrevOutput and self.buffer1:copy(self.gradPrevOutput) or self.buffer1:zero()
    -- local grad_next_c = self.userNextGradCell and self.buffer2:copy(self.userNextGradCell) or self.buffer2:zero()
    
@@ -384,9 +355,9 @@ function ChildSumLSTM:backward(input, gradOutput, scale)
       grad_ai:fill(1):add(-1, i):cmul(i):cmul(g):cmul(grad_next_c)
       -- grad_af:fill(1):add(-1, f):cmul(f):cmul(prev_c):cmul(grad_next_c)
       
-      self.buffer0:addcmul(h:transpose(1, 2), connect_expand[t]) -- size: (N, T, H)
+      self.buffer0:cmul(h:transpose(1, 2), connect_expand[t]) -- size: (N, T, H)
       
-      grad_x[t]:mm(grad_a, Wx:t())
+      grad_x[t]:mm(grad_a, Wx:t()) -- backprop to input from i,o,g
       grad_Wx:addmm(scale, x[t]:t(), grad_a)
       grad_Wh:addmm(scale, self.buffer0:sum(2):view(N, H):t(), grad_a)
       self.buffer2:mm(grad_a, Wh:t()) -- size: (N, H)
@@ -397,6 +368,7 @@ function ChildSumLSTM:backward(input, gradOutput, scale)
       self.buffer0:cmul(c:transpose(1, 2), connect_expand[t])
       grad_f:fill(1):add(-1, f):cmul(f):cmul(self.buffer0):cmul(grad_next_c:view(N, 1, H):expand(N, T, H)) -- size: (N, T, H)
       grad_c:addcmul(grad_next_c:view(N, 1, H):expand(N, T, H), torch.cmul(f, connect_expand[t])) -- backprop to predecessors' cells
+      grad_x[t]:addmm(grad_f:sum(2):view(N, H), Wfx:t())
       grad_Wfx:addmm(scale, x[t]:t(), grad_f:sum(2):view(N, H))
       
       self.buffer0:zero():addcmul(h:transpose(1, 2), connect_expand[t]) -- size: (N, T, H)
