@@ -329,9 +329,9 @@ function ChildSumLSTM:backward(input, gradOutput, scale)
    
       local grad_a = self.grad_a_buffer:resize(N, 3 * H):zero()
       local grad_f = self.grad_f_buffer:resize(N, T, H):zero() -- grads for fgates size: (N, T, H)
-      local grad_ai = grad_a[{{}, {1, H}}]
-      local grad_ao = grad_a[{{}, {H + 1, 2 * H}}]
-      local grad_ag = grad_a[{{}, {2 * H + 1, 3 * H}}]
+      local grad_ai = grad_a[{{}, {1, H}}]   -- size: (N, H)
+      local grad_ao = grad_a[{{}, {H + 1, 2 * H}}]    -- size: (N, H)
+      local grad_ag = grad_a[{{}, {2 * H + 1, 3 * H}}]   -- size: (N, H)
       
       -- We will use grad_ai, grad_af, and grad_ao as temporary buffers
       -- to compute grad_next_c. We will need tanh_next_c (stored in grad_ai)
@@ -365,9 +365,9 @@ function ChildSumLSTM:backward(input, gradOutput, scale)
       grad_h:add(self.buffer0:transpose(1, 2)) -- backprop to predecessors' output from i,o,g
       -- grad_Wh:addmm(scale, prev_h:t(), grad_a)
       
-      self.buffer0:cmul(c:transpose(1, 2), connect_expand[t])
+      self.buffer0:cmul(c:transpose(1, 2), connect_expand[t]) -- size: (N, T, H)
       grad_f:fill(1):add(-1, f):cmul(f):cmul(self.buffer0):cmul(grad_next_c:view(N, 1, H):expand(N, T, H)) -- size: (N, T, H)
-      grad_c:addcmul(grad_next_c:view(N, 1, H):expand(N, T, H), torch.cmul(f, connect_expand[t])) -- backprop to predecessors' cells
+      grad_c:transpose(1, 2):addcmul(grad_next_c:view(N, 1, H):expand(N, T, H), torch.cmul(f, connect_expand[t])) -- backprop to predecessors' cells
       grad_x[t]:addmm(grad_f:sum(2):view(N, H), Wfx:t())
       grad_Wfx:addmm(scale, x[t]:t(), grad_f:sum(2):view(N, H))
       
